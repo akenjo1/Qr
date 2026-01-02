@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
-import { TEMPLATES, Template } from "@/lib/templates";
+import { makeLocalTemplates, Template } from "@/lib/templates";
 
-type ImgState = { file?: File; url?: string };
+type ImgState = { url?: string };
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
@@ -32,50 +32,66 @@ async function loadImage(src: string): Promise<HTMLImageElement> {
 export default function Editor() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  const [templateId, setTemplateId] = useState(TEMPLATES[0].id);
-  const template = useMemo<Template>(
-    () => TEMPLATES.find(t => t.id === templateId) ?? TEMPLATES[0],
-    [templateId]
+  const [templates, setTemplates] = useState<Template[]>(() => makeLocalTemplates(100));
+  const [templateId, setTemplateId] = useState<string>("auto-1");
+
+  const template = useMemo(
+    () => templates.find(t => t.id === templateId) ?? templates[0],
+    [templates, templateId]
   );
 
   const [text, setText] = useState("https://example.com");
   const [title, setTitle] = useState("SCAN HERE!");
   const [subtitle, setSubtitle] = useState("My Link");
-  const [qrSize, setQrSize] = useState(520); // pixel inside panel
+  const [qrSize, setQrSize] = useState(560);
+
   const [avatar, setAvatar] = useState<ImgState>({});
   const [bgImage, setBgImage] = useState<ImgState>({});
   const [busy, setBusy] = useState(false);
 
-  const W = 1200;
-  const H = 1200;
+  const W = 1200, H = 1200; // 1:1
+
+  async function refreshTemplates() {
+    try {
+      const r = await fetch("/api/templates", { cache: "no-store" });
+      const data = await r.json();
+      if (Array.isArray(data.templates) && data.templates.length) {
+        setTemplates(data.templates);
+        setTemplateId((cur) =>
+          data.templates.some((t: Template) => t.id === cur) ? cur : data.templates[0].id
+        );
+      }
+    } catch {}
+  }
+
+  useEffect(() => {
+    refreshTemplates();
+    const id = setInterval(refreshTemplates, 60_000); // tự cập nhật mỗi 60s
+    return () => clearInterval(id);
+  }, []);
 
   async function render() {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    setBusy(true);
+    if (!canvas || !template) return;
 
+    setBusy(true);
     try {
       canvas.width = W;
       canvas.height = H;
-
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
-      // background
-      ctx.clearRect(0, 0, W, H);
+      // BG
       ctx.fillStyle = template.bg;
       ctx.fillRect(0, 0, W, H);
 
-      // optional background image (cover)
+      // BG Image (optional)
       if (bgImage.url) {
         const img = await loadImage(bgImage.url);
         const scale = Math.max(W / img.width, H / img.height);
-        const dw = img.width * scale;
-        const dh = img.height * scale;
-        const dx = (W - dw) / 2;
-        const dy = (H - dh) / 2;
+        const dw = img.width * scale, dh = img.height * scale;
+        const dx = (W - dw) / 2, dy = (H - dh) / 2;
 
-        // soften overlay to keep QR readable
         ctx.save();
         ctx.globalAlpha = 0.95;
         ctx.drawImage(img, dx, dy, dw, dh);
@@ -85,24 +101,13 @@ export default function Editor() {
         ctx.restore();
       }
 
-      // layout numbers
       const pad = 70;
-      const topTitleH = 210;
-      const panelX = pad;
-      const panelY = topTitleH + 40;
-      const panelW = W - pad * 2;
-      const panelH = H - panelY - pad;
-
-      // Title bubble / header
-      ctx.save();
-      const titleBoxX = pad;
       const titleBoxY = pad;
-      const titleBoxW = W - pad * 2;
       const titleBoxH = 160;
 
+      // Title bubble
       if (template.bubbleTitle) {
-        // bubble background
-        roundedRect(ctx, titleBoxX, titleBoxY, titleBoxW, titleBoxH, 42);
+        roundedRect(ctx, pad, titleBoxY, W - pad * 2, titleBoxH, 42);
         ctx.fillStyle = "rgba(255,255,255,0.75)";
         ctx.fill();
         ctx.lineWidth = 10;
@@ -110,68 +115,66 @@ export default function Editor() {
         ctx.stroke();
       }
 
-      // title text
+      // Title text
       ctx.fillStyle = template.text;
-      ctx.font = "900 96px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto";
+      ctx.font = "900 96px ui-sans-serif, system-ui";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(title, W / 2, titleBoxY + 70);
 
-      // subtitle
-      ctx.font = "600 34px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto";
+      // Subtitle
+      ctx.font = "600 34px ui-sans-serif, system-ui";
       ctx.fillStyle = template.accent;
       ctx.fillText(subtitle, W / 2, titleBoxY + 125);
-      ctx.restore();
 
-      // Panel with shadow
-      ctx.save();
+      // Panel
+      const panelY = titleBoxY + titleBoxH + 80;
+      const panelX = pad;
+      const panelW = W - pad * 2;
+      const panelH = H - panelY - pad;
+
       if (template.shadow) {
+        ctx.save();
         ctx.shadowColor = "rgba(0,0,0,0.25)";
         ctx.shadowBlur = 28;
         ctx.shadowOffsetY = 16;
+        roundedRect(ctx, panelX, panelY, panelW, panelH, template.radius);
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fill();
+        ctx.restore();
+      } else {
+        roundedRect(ctx, panelX, panelY, panelW, panelH, template.radius);
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fill();
       }
-      roundedRect(ctx, panelX, panelY, panelW, panelH, template.radius);
-      ctx.fillStyle = template.panel;
-      ctx.fill();
-      ctx.restore();
 
-      // panel stroke
-      ctx.save();
       ctx.lineWidth = 14;
       ctx.strokeStyle = template.frame;
       roundedRect(ctx, panelX, panelY, panelW, panelH, template.radius);
       ctx.stroke();
-      ctx.restore();
 
-      // tiny stickers (simple)
-      drawSticker(ctx, panelX + 30, panelY + 30, template.accent);
-      drawSticker(ctx, panelX + panelW - 90, panelY + panelH - 90, template.accent);
-
-      // QR generation
+      // QR
       const qrDataUrl = await QRCode.toDataURL(text, {
         errorCorrectionLevel: "H",
         margin: 1,
         width: qrSize,
-        color: { dark: "#000000", light: "#FFFFFF" },
+        color: { dark: "#000000", light: "#FFFFFF" }
       });
-      const qrImg = await loadImage(qrDataUrl);
 
-      // QR placement centered inside panel
+      const qrImg = await loadImage(qrDataUrl);
       const qrMax = Math.min(panelW, panelH) - 140;
       const qrDraw = clamp(qrSize, 360, qrMax);
       const qrX = panelX + (panelW - qrDraw) / 2;
       const qrY = panelY + (panelH - qrDraw) / 2;
 
-      // QR white backing
-      ctx.save();
+      // backing
       roundedRect(ctx, qrX - 18, qrY - 18, qrDraw + 36, qrDraw + 36, 28);
       ctx.fillStyle = "#FFFFFF";
       ctx.fill();
-      ctx.restore();
 
       ctx.drawImage(qrImg, qrX, qrY, qrDraw, qrDraw);
 
-      // Avatar in center (optional)
+      // Avatar center
       if (avatar.url) {
         const av = await loadImage(avatar.url);
         const r = Math.floor(qrDraw * 0.115);
@@ -179,44 +182,26 @@ export default function Editor() {
         const cy = qrY + qrDraw / 2;
 
         ctx.save();
-        // white ring
         ctx.beginPath();
         ctx.arc(cx, cy, r + 12, 0, Math.PI * 2);
         ctx.fillStyle = "#FFFFFF";
         ctx.fill();
 
-        // clip circle
         ctx.beginPath();
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
         ctx.clip();
 
-        // cover crop
         const scale = Math.max((r * 2) / av.width, (r * 2) / av.height);
-        const dw = av.width * scale;
-        const dh = av.height * scale;
-        const dx = cx - dw / 2;
-        const dy = cy - dh / 2;
-        ctx.drawImage(av, dx, dy, dw, dh);
-
+        const dw = av.width * scale, dh = av.height * scale;
+        ctx.drawImage(av, cx - dw / 2, cy - dh / 2, dw, dh);
         ctx.restore();
 
-        // outline
-        ctx.save();
         ctx.beginPath();
         ctx.arc(cx, cy, r + 12, 0, Math.PI * 2);
         ctx.lineWidth = 8;
         ctx.strokeStyle = template.frame;
         ctx.stroke();
-        ctx.restore();
       }
-
-      // footer hint
-      ctx.save();
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.font = "600 22px ui-sans-serif, system-ui";
-      ctx.textAlign = "center";
-      ctx.fillText("Generated with QR Template Studio", W / 2, H - 30);
-      ctx.restore();
     } finally {
       setBusy(false);
     }
@@ -225,16 +210,16 @@ export default function Editor() {
   useEffect(() => {
     render();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [templateId, text, title, subtitle, qrSize, avatar.url, bgImage.url]);
+  }, [templateId, text, title, subtitle, qrSize, avatar.url, bgImage.url, templates.length]);
 
-  async function onPickAvatar(file?: File) {
+  async function pickAvatar(file?: File) {
     if (!file) return setAvatar({});
-    setAvatar({ file, url: await fileToDataURL(file) });
+    setAvatar({ url: await fileToDataURL(file) });
   }
 
-  async function onPickBg(file?: File) {
+  async function pickBg(file?: File) {
     if (!file) return setBgImage({});
-    setBgImage({ file, url: await fileToDataURL(file) });
+    setBgImage({ url: await fileToDataURL(file) });
   }
 
   function downloadPNG() {
@@ -250,6 +235,19 @@ export default function Editor() {
     <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
       <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
         <div className="space-y-4">
+          <div className="flex gap-2">
+            <button
+              className="rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm"
+              onClick={refreshTemplates}
+              type="button"
+            >
+              Cập nhật mẫu
+            </button>
+            <div className="text-xs text-zinc-400 self-center">
+              ({templates.length} mẫu)
+            </div>
+          </div>
+
           <div>
             <label className="text-sm text-zinc-300">Template</label>
             <select
@@ -257,14 +255,14 @@ export default function Editor() {
               value={templateId}
               onChange={(e) => setTemplateId(e.target.value)}
             >
-              {TEMPLATES.map((t) => (
+              {templates.map((t) => (
                 <option key={t.id} value={t.id}>{t.name}</option>
               ))}
             </select>
           </div>
 
           <div>
-            <label className="text-sm text-zinc-300">Nội dung QR (URL / text)</label>
+            <label className="text-sm text-zinc-300">Nội dung QR</label>
             <input
               className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 p-3"
               value={text}
@@ -307,36 +305,22 @@ export default function Editor() {
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-sm text-zinc-300">Avatar (ở giữa QR)</label>
+              <label className="text-sm text-zinc-300">Avatar</label>
               <input
                 type="file"
                 accept="image/*"
                 className="mt-1 w-full text-sm"
-                onChange={(e) => onPickAvatar(e.target.files?.[0])}
+                onChange={(e) => pickAvatar(e.target.files?.[0])}
               />
-              <button
-                className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm"
-                onClick={() => setAvatar({})}
-                type="button"
-              >
-                Xoá avatar
-              </button>
             </div>
             <div>
-              <label className="text-sm text-zinc-300">Ảnh nền (tuỳ chọn)</label>
+              <label className="text-sm text-zinc-300">Ảnh nền</label>
               <input
                 type="file"
                 accept="image/*"
                 className="mt-1 w-full text-sm"
-                onChange={(e) => onPickBg(e.target.files?.[0])}
+                onChange={(e) => pickBg(e.target.files?.[0])}
               />
-              <button
-                className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm"
-                onClick={() => setBgImage({})}
-                type="button"
-              >
-                Xoá nền
-              </button>
             </div>
           </div>
 
@@ -358,10 +342,6 @@ export default function Editor() {
             >
               ↻
             </button>
-          </div>
-
-          <div className="text-xs text-zinc-400">
-            Gợi ý: muốn giống “poster QR” như hình bạn gửi → upload ảnh nền của bạn (hoặc artwork bạn có quyền).
           </div>
         </div>
       </section>
@@ -392,29 +372,4 @@ function roundedRect(
   ctx.arcTo(x, y + h, x, y, rr);
   ctx.arcTo(x, y, x + w, y, rr);
   ctx.closePath();
-}
-
-function drawSticker(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) {
-  // star sticker
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(-0.15);
-  ctx.fillStyle = "rgba(255,255,255,0.7)";
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 6;
-
-  const R = 28;
-  const r = 13;
-  const spikes = 5;
-
-  ctx.beginPath();
-  for (let i = 0; i < spikes * 2; i++) {
-    const ang = (Math.PI / spikes) * i;
-    const rad = i % 2 === 0 ? R : r;
-    ctx.lineTo(Math.cos(ang) * rad, Math.sin(ang) * rad);
-  }
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
 }
