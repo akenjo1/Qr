@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { makeLocalTemplates, Template } from "@/lib/templates";
+import { makeLocalTemplates, Template } from "../../../../lib/templates";
 
 export const runtime = "nodejs";
 
