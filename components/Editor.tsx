@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
-import { makeLocalTemplates, Template } from "@/lib/templates";
+import { makeLocalTemplates, Template } from "../lib/templates";
 
 type ImgState = { url?: string };
 
