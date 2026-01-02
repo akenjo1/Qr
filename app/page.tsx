@@ -10,6 +10,9 @@ export default function Page() {
         </p>
       </div>
       <Editor />
+      <p className="mt-6 text-xs text-zinc-400">
+        Tip: Nếu bạn set biến môi trường <b>TEMPLATES_URL</b> trên Vercel, web sẽ tự nạp thêm mẫu từ JSON đó.
+      </p>
     </main>
   );
 }
